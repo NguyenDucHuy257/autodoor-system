@@ -8,23 +8,23 @@ from app.recognition.detector import (
 
 class YuNetDetector(FaceDetector):
     def __init__(
-            self,
-            model_path: str,
-            score_threshold: float = 0.9,
-            nms_threshold: float = 0.3, #iou - tỉ lệ phần giao > 0,3 ưu tiên box score cao hơn 
-            top_k: int = 5000
+        self,
+        model_path: str,
+        score_threshold: float = 0.6,
+        nms_threshold: float = 0.2, #iou - tỉ lệ phần giao > 0,3 ưu tiên box score cao hơn 
+        top_k: int = 5000
     ):
         self.detector = cv2.FaceDetectorYN.create(
             model_path,
             "",
-            (320,320),
+            (960, 540),
             score_threshold,
             nms_threshold,  
             top_k
         ) #load trước model 1 lần 
     def detect(
-            self,
-            frame: np.ndarray,
+        self,
+        frame: np.ndarray,
     ) -> list[FaceDetection]:
         
         if frame is None or frame.size == 0:

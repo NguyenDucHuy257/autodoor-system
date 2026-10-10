@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card hero">
+  <h1>AutoDoor Test Remote</h1>
+  <p class="muted">PC-side AI processing &middot; LAN only</p>
+  <p class="muted small">PC: http://{{ lan_ip }}:8000</p>
+</section>
+
+<nav class="menu">
+  <a class="menu-btn" href="/calibration">CAMERA CALIBRATION</a>
+  <a class="menu-btn" href="/enrollment">MEMBER ENROLLMENT</a>
+  <a class="menu-btn" href="/recognition">REALTIME DEBUG</a>
+</nav>
+
+<section class="card">
+  <h2>Camera</h2>
+  <div id="camera-selector" class="camera-selector"></div>
+  <p class="muted small" id="camera-error"></p>
+</section>
+
+<section class="card">
+  <h2>Preview</h2>
+  <div class="video-wrap">
+    <img id="video" alt="video stream">
+  </div>
+</section>
+{% endblock %}

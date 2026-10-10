@@ -115,7 +115,6 @@ class FaceQualityGate:
         frame_height, frame_width = frame.shape[:2]
 
         face_ratio = face.width/frame_width #50%
-        print("face_ratio=",face_ratio)
 
         confidence_score = 0 #face_ratio*0.5 + sharpness*0.25 + brightness*0.25
         

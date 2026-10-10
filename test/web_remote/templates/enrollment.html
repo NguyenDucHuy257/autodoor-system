@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Member</h2>
+  <label class="field">
+    <span>Họ tên</span>
+    <input type="text" id="enr-name" placeholder="Nguyen Van A" autocomplete="off">
+  </label>
+  <label class="field">
+    <span>Phòng</span>
+    <input type="text" id="enr-room" placeholder="P.101" autocomplete="off">
+  </label>
+</section>
+
+<section class="card">
+  <h2>Camera</h2>
+  <div id="camera-selector" class="camera-selector"></div>
+  <p class="muted small" id="camera-error"></p>
+</section>
+
+<section class="card">
+  <div class="video-wrap">
+    <img id="video" alt="video stream">
+  </div>
+</section>
+
+<section class="card">
+  <h2>Enrollment</h2>
+
+  <div class="kv-grid">
+    <div class="kv"><span>Tên</span><b id="enr-s-name">-</b></div>
+    <div class="kv"><span>Phòng</span><b id="enr-s-room">-</b></div>
+    <div class="kv"><span>Source</span><b id="enr-s-source">-</b></div>
+    <div class="kv"><span>Channel</span><b id="enr-s-channel">-</b></div>
+  </div>
+
+  <div class="pose-list" id="enr-poses"></div>
+
+  <div class="kv-grid">
+    <div class="kv"><span>NEXT POSE</span><b id="enr-next">-</b></div>
+    <div class="kv"><span>PROGRESS</span><b id="enr-progress">-</b></div>
+    <div class="kv wide"><span>COLLECTED</span><b id="enr-collected">-</b></div>
+  </div>
+
+  <div class="big-status" id="enr-message">Fill the form, pick a camera, press START</div>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" id="btn-enr-start">START ENROLLMENT</button>
+    <button class="btn btn-danger" id="btn-enr-cancel" disabled>CANCEL</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Live quality (debug)</h2>
+  <div class="kv-grid" id="enr-debug">
+    <div class="kv"><span>faces</span><b data-k="face_count">-</b></div>
+    <div class="kv"><span>detected pose</span><b data-k="detected_pose">-</b></div>
+    <div class="kv"><span>quality</span><b data-k="passed">-</b></div>
+    <div class="kv"><span>confidence</span><b data-k="confidence">-</b></div>
+    <div class="kv"><span>face_ratio</span><b data-k="face_ratio">-</b></div>
+    <div class="kv"><span>sharpness</span><b data-k="sharpness">-</b></div>
+    <div class="kv"><span>brightness</span><b data-k="brightness">-</b></div>
+  </div>
+
+  <h2 style="margin-top:12px">Quality checks (loaded thresholds)</h2>
+  <table class="table" id="enr-checks">
+    <tr><th>metric</th><th>value</th><th>op</th><th>threshold</th><th>result</th></tr>
+  </table>
+  <p class="muted small">Thresholds loaded from .env at: <span id="enr-started">-</span> (auto reload when .env changes).</p>
+</section>
+
+<section class="card result-card" id="enr-result" hidden>
+  <h2 class="ok-text">ENROLLMENT SUCCESS</h2>
+  <div class="kv-grid">
+    <div class="kv"><span>ID</span><b id="enr-r-id">-</b></div>
+    <div class="kv"><span>Code</span><b id="enr-r-code">-</b></div>
+    <div class="kv"><span>Name</span><b id="enr-r-name">-</b></div>
+    <div class="kv"><span>Room</span><b id="enr-r-room">-</b></div>
+  </div>
+</section>
+{% endblock %}

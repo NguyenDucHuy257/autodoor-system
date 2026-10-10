@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Camera</h2>
+  <div id="camera-selector" class="camera-selector"></div>
+  <p class="muted small" id="camera-error"></p>
+</section>
+
+<section class="card">
+  <div class="video-wrap">
+    <img id="video" alt="video stream">
+  </div>
+</section>
+
+<section class="card">
+  <h2>Calibration</h2>
+
+  <div class="stage-list" id="stage-list"></div>
+
+  <div class="kv-grid">
+    <div class="kv"><span>Stage</span><b id="cal-stage">-</b></div>
+    <div class="kv"><span>Phase</span><b id="cal-phase">-</b></div>
+    <div class="kv"><span>Countdown</span><b id="cal-countdown">-</b></div>
+    <div class="kv"><span>Samples</span><b id="cal-samples">-</b></div>
+    <div class="kv"><span>Faces</span><b id="cal-faces">-</b></div>
+    <div class="kv"><span>Guide</span><b id="cal-guide">-</b></div>
+  </div>
+
+  <div class="big-status" id="cal-message">Press START CALIBRATION</div>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" id="btn-cal-start">START CALIBRATION</button>
+    <button class="btn btn-accent" id="btn-cal-ready" disabled>READY</button>
+    <button class="btn btn-danger" id="btn-cal-cancel" disabled>CANCEL</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Live metrics</h2>
+  <div class="kv-grid" id="cal-live">
+    <div class="kv"><span>yaw</span><b data-k="yaw">-</b></div>
+    <div class="kv"><span>pitch</span><b data-k="pitch">-</b></div>
+    <div class="kv"><span>face_ratio</span><b data-k="face_ratio">-</b></div>
+    <div class="kv"><span>confidence</span><b data-k="confidence">-</b></div>
+    <div class="kv"><span>sharpness</span><b data-k="sharpness">-</b></div>
+    <div class="kv"><span>brightness</span><b data-k="brightness">-</b></div>
+  </div>
+</section>
+
+<section class="card" id="cal-result" hidden>
+  <h2>Medians</h2>
+  <div class="table-wrap">
+    <table class="table" id="cal-medians"></table>
+  </div>
+
+  <h2>Generated settings</h2>
+  <p class="muted small">
+    <b>strict</b> = calibrate_camera.py formula. <b>relaxed</b> = wider quality gate for outdoor /
+    laggy cams (confidence -0.06, sharpness x0.5, face ratio x0.6, brightness +/-20).
+    The <b>save</b> column is what gets written: edit any value by hand.
+  </p>
+  <div class="btn-row">
+    <button class="btn btn-accent" id="btn-cal-fill-strict">USE STRICT</button>
+    <button class="btn btn-accent" id="btn-cal-fill-relaxed">USE RELAXED</button>
+  </div>
+  <div class="table-wrap">
+    <table class="table" id="cal-thresholds"></table>
+  </div>
+
+  <p class="muted small">Only these keys are written. DB / RTSP config stay untouched.
+    After save, the running server reloads the values immediately (no restart).<br>
+    <span id="cal-env-path"></span></p>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" id="btn-cal-save">SAVE TO .ENV</button>
+  </div>
+  <div class="big-status" id="cal-save-status"></div>
+</section>
+
+<section class="card">
+  <h2>Thresholds currently loaded</h2>
+  <table class="table" id="loaded-thresholds"></table>
+  <p class="muted small">Loaded at: <span id="thr-loaded-at">-</span></p>
+  <div class="btn-row">
+    <button class="btn btn-accent" id="btn-thr-reload">RELOAD FROM .ENV</button>
+  </div>
+</section>
+{% endblock %}

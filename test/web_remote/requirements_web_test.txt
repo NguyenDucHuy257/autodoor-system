@@ -1,0 +1,7 @@
+# Dependencies ONLY for the LAN web test tool (test/web_remote).
+# Install into the project venv:
+#   pip install -r test/web_remote/requirements_web_test.txt
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>{{ title }} - AutoDoor Test Remote</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-page="{{ page }}">
+  <header class="topbar">
+    <a href="/" class="brand">AutoDoor Test Remote</a>
+    <div class="topbar-right">
+      <span id="sys-mode" class="badge badge-mode">IDLE</span>
+      <span id="sys-cam" class="badge">NONE</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="env-stale" class="banner hidden"></div>
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

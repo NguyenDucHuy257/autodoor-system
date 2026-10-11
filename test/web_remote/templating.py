@@ -10,3 +10,4 @@ TEMPLATES_DIR = WEB_DIR / "templates"
 STATIC_DIR = WEB_DIR / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.globals["asset_version"] = lambda name: (STATIC_DIR / name).stat().st_mtime_ns

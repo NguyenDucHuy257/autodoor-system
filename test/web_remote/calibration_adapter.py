@@ -4,7 +4,7 @@ Test-only adapter for camera calibration math.
 calibrate_camera.py is a monolithic script (it opens the webcam and runs its
 main loop at import time), so it cannot be imported by the web tool.
 The pure functions below mirror calibrate_camera.py 1:1 so the web page
-produces the same thresholds. They are NOT AI algorithms from app/ (YuNet and
+produces the same thresholds. They are NOT AI algorithms from app/ (SCRFD and
 FaceQualityGate are still imported from app/ and reused).
 
 Keep in sync with calibrate_camera.py:

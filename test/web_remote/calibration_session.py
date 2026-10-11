@@ -1,7 +1,7 @@
 """
 Web version of calibrate_camera.py (TEST ONLY).
 
-Reuses YuNetDetector + FaceQualityGate from app/ (via runtime.ai).
+Reuses WebSCRFDDetector + FaceQualityGate from app/ (via runtime.ai).
 Math comes from calibration_adapter (mirror of calibrate_camera.py).
 
 Phases per stage:  WAIT -> (user READY) -> PREPARE (5s countdown) -> CAPTURE (30 samples)

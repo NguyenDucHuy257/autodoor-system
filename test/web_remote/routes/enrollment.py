@@ -1,4 +1,4 @@
-"""Enrollment page + API (TEST ONLY). Uses EnrollmentService through EnrollmentSession."""
+"""Enrollment page + API (TEST ONLY). Uses an isolated AdaFace gallery."""
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -32,7 +32,7 @@ def enrollment_start(body: EnrollmentStartRequest):
     if runtime.camera.source == "NONE":
         return {"ok": False, "message": "Select a camera first"}
 
-    # check the mode BEFORE opening a DB session
+    # Check the mode before preparing local enrollment.
     active = runtime.current_session()
     if active is not None:
         return {"ok": False, "message": "System busy: %s" % active.mode}

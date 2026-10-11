@@ -5,3 +5,6 @@ fastapi
 uvicorn[standard]
 jinja2
 python-multipart
+
+Pillow
+# Reuses the project onnxruntime/onnxruntime-gpu installation for AdaFace.

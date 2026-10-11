@@ -1,35 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
+<section class="card"><h2>Camera</h2><div id="camera-selector" class="camera-selector"></div><p id="camera-error" class="muted small"></p></section>
 <section class="card">
-  <h2>Camera</h2>
-  <div id="camera-selector" class="camera-selector"></div>
-  <p class="muted small" id="camera-error"></p>
+  <h2>Camera trực tiếp</h2>
+  <div class="video-wrap direct-preview-small"><canvas id="video" width="960" height="540"></canvas></div>
+  <h2>Khung hình nhận diện</h2>
+  <div class="video-wrap recognition-view"><canvas id="ai-video" width="960" height="540"></canvas><div id="rec-thumbnails" class="face-thumbnails" aria-label="Các khuôn mặt nhận diện"></div></div>
+  <div class="btn-row"><button class="btn btn-primary" id="btn-rec-start">BẮT ĐẦU NHẬN DIỆN</button><button class="btn btn-danger" id="btn-rec-stop" disabled>DỪNG</button></div>
+  <div id="rec-message" class="big-status"></div><p id="rec-recording" class="muted small"></p>
 </section>
-
-<section class="card">
-  <div class="video-wrap">
-    <img id="video" alt="video stream">
-  </div>
-  <div class="btn-row">
-    <button class="btn btn-primary" id="btn-rec-start">START RECOGNITION</button>
-    <button class="btn btn-danger" id="btn-rec-stop" disabled>STOP</button>
-  </div>
-  <div class="big-status" id="rec-message">Press START RECOGNITION</div>
-</section>
-
-<section class="card">
-  <h2>Global</h2>
-  <div class="kv-grid">
-    <div class="kv"><span>Source</span><b id="rec-source">-</b></div>
-    <div class="kv"><span>Channel</span><b id="rec-channel">-</b></div>
-    <div class="kv"><span>Faces</span><b id="rec-faces">-</b></div>
-    <div class="kv"><span>FPS</span><b id="rec-fps">-</b></div>
-    <div class="kv"><span>YuNet time</span><b id="rec-yunet">-</b></div>
-    <div class="kv"><span>DB embeddings</span><b id="rec-db">-</b></div>
-    <div class="kv"><span>Match threshold</span><b id="rec-threshold">-</b></div>
-    <div class="kv"><span>Frame</span><b id="rec-frame">-</b></div>
-  </div>
-</section>
-
-<section id="rec-face-list"></section>
+<section class="card"><h2>Kết quả SCRFD + AdaFace</h2><div id="rec-face-list" aria-live="polite"><p class="muted">Chưa có kết quả nhận diện.</p></div></section>
 {% endblock %}

@@ -6,8 +6,7 @@ TEST ONLY - lives in test/web_remote.
 Owns:
   * the single CameraManager
   * the AI components (imported from app/, never re-implemented)
-  * ONE worker thread that grabs frames, runs the active mode session,
-    and keeps the latest JPEG for the MJPEG stream
+  * separate capture, preview, detection, recognition and recording workers
   * mode management: IDLE / CALIBRATION / ENROLLMENT / RECOGNITION
 """
 
@@ -18,14 +17,16 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from app.performance import performance
 from dotenv import dotenv_values
 
 import app.config as app_config
 import app.services.enrollment_service as enrollment_service_module
 
-from app.recognition.yunet_detector import YuNetDetector
-from app.recognition.sface_embedder import SFaceEmbedder
-from app.recognition.face_matcher import FaceMatcher
+from test.web_remote.scrfd_adapter import WebSCRFDDetector
+from test.web_remote.adaface_engine import AdaEngine, DemoGallery
+from test.web_remote.recorder import EventRecorder
+
 from app.recognition.face_quality import FaceQualityGate
 
 from app.config import (
@@ -49,13 +50,9 @@ log = logging.getLogger("web_remote")
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 MODELS_DIR = ROOT_DIR / "models"
-YUNET_MODEL_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
-SFACE_MODEL_PATH = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
+SCRFD_MODEL_PATH = MODELS_DIR / "scrfd" / "det_10g.onnx"
 
 ENV_PATH = ROOT_DIR / ".env"
-
-# same value used by test/test_realtime.py and detect_realtime.py
-MATCH_THRESHOLD = 0.4
 
 PREVIEW_MAX_WIDTH = 960
 JPEG_QUALITY = 70
@@ -125,17 +122,13 @@ def quality_breakdown(gate: FaceQualityGate, quality) -> list[dict]:
 class AIComponents:
 
     def __init__(self):
-        self.detector = YuNetDetector(
-            model_path=str(YUNET_MODEL_PATH),
+        self.detector = WebSCRFDDetector(
+            model_path=str(SCRFD_MODEL_PATH),
         )
 
-        self.embedder = SFaceEmbedder(
-            model_path=str(SFACE_MODEL_PATH),
-        )
-
-        self.matcher = FaceMatcher(
-            match_threshold=MATCH_THRESHOLD,
-        )
+        self.engine = None
+        self.gallery = None
+        self.model_error = None
 
         # production thresholds from .env (same as the test scripts)
         self.quality_gate = FaceQualityGate(
@@ -155,6 +148,10 @@ class AIComponents:
             min_brightness=0.0,
             max_brightness=255.0,
         )
+        # Measure the shared instances, including calls made inside EnrollmentService.
+        self.detector.detect = performance.wrap("detection_ms", self.detector.detect)
+        self.quality_gate.evaluate = performance.wrap("quality_ms", self.quality_gate.evaluate)
+        self.calibration_gate.evaluate = performance.wrap("quality_ms", self.calibration_gate.evaluate)
 
 
 # ----------------------------------------------------------------------
@@ -200,13 +197,23 @@ class Runtime:
         self.camera = CameraManager()
         self.ai: AIComponents | None = None
 
-        self._mode_lock = threading.Lock()
+        self._mode_lock = threading.RLock()
         self._session: BaseSession | None = None
         self._last_sessions: dict[str, BaseSession] = {}
 
         self._frame_cond = threading.Condition()
         self._jpeg: bytes | None = None
         self._frame_id = 0
+        self._ai_jpeg = None
+        self._ai_faces = []
+        self._ai_frame_id = 0
+        self._ai_timestamp = 0.0
+        self._jpeg_generation = self._ai_generation = 0
+        self._jobs = threading.Condition()
+        self._detect_job = None
+        self._reco_job = None
+        self._workers = []
+        self.recorder = EventRecorder()
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -226,9 +233,24 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
+        performance.start(
+            ROOT_DIR / "logs", opencv_version=cv2.__version__,
+            opencv_threads=cv2.getNumThreads(),
+            cuda_dnn_targets=list(cv2.dnn.getAvailableTargets(cv2.dnn.DNN_BACKEND_CUDA)),
+            loop_fps_limit=MAX_LOOP_FPS, preview_max_width=PREVIEW_MAX_WIDTH,
+            jpeg_quality=JPEG_QUALITY, detector="SCRFD-10G", embedder="AdaFace",
+        )
+        log.info("Performance log: %s", performance.log_path)
+        performance.update(mode=MODE_IDLE, source=self.camera.source, channel=self.camera.channel)
         if self.ai is None:
             log.info("Loading AI models from %s", MODELS_DIR)
-            self.ai = AIComponents()
+            try:
+                with performance.measure("model_load_ms"):
+                    self.ai = AIComponents()
+            except Exception:
+                performance.event("startup_failed", stage="model_load")
+                performance.stop()
+                raise
 
         try:
             self._env_mtime_seen = ENV_PATH.stat().st_mtime
@@ -242,6 +264,12 @@ class Runtime:
             daemon=True,
         )
         self._thread.start()
+        self.camera.start()
+        self.recorder.start()
+        for name, target in (("ui-detector", self._detect_loop), ("ui-recognizer", self._recognize_loop), ("ui-model-loader", self._load_engine)):
+            thread = threading.Thread(target=target, name=name, daemon=True)
+            self._workers.append(thread)
+            thread.start()
 
     def shutdown(self) -> None:
         self._stop_event.set()
@@ -260,11 +288,17 @@ class Runtime:
             self._thread.join(timeout=3)
             self._thread = None
 
-        self.camera.stop()
+        with self._jobs:
+            self._jobs.notify_all()
+        self.camera.shutdown()
+        for worker in self._workers:
+            worker.join(timeout=5)
+        self.recorder.stop()
 
         # wake any MJPEG client so its generator can exit
         with self._frame_cond:
             self._frame_cond.notify_all()
+        performance.stop()
 
     @property
     def shutting_down(self) -> bool:
@@ -278,7 +312,6 @@ class Runtime:
         with self._mode_lock:
             session = self._session
             if session is not None and session.finished:
-                self._session = None
                 return None
             return session
 
@@ -295,8 +328,11 @@ class Runtime:
             active = self._session
             if active is not None and not active.finished:
                 raise BusyError(f"System busy: {active.mode}")
+            self._clear_ai()
             self._session = session
             self._last_sessions[session.mode] = session
+        performance.update(mode=session.mode)
+        performance.event("session_start", mode=session.mode)
 
     def stop_session(self, mode: str) -> bool:
         with self._mode_lock:
@@ -304,8 +340,11 @@ class Runtime:
             if session is None or session.mode != mode:
                 return False
             self._session = None
+            self._clear_ai()
+            self.recorder.submit(None, None, None)
 
         session.stop()
+        performance.event("session_stop", mode=mode)
         return True
 
     def session_for(self, mode: str) -> BaseSession | None:
@@ -319,15 +358,27 @@ class Runtime:
     # camera control (checks the mode lock)
     # ------------------------------------------------------------------
 
-    def set_camera_laptop(self) -> tuple[bool, str]:
-        if self.camera_locked():
-            return False, f"Camera locked: {self.current_mode()} in progress"
-        return self.camera.use_laptop()
+    def _switch(self, action):
+        with self._mode_lock:
+            if self.camera_locked():
+                return False, f"Camera locked: {self.current_mode()} in progress"
+            result = action()
+            with self._frame_cond:
+                self._jpeg = None
+                self._frame_id += 1
+                self._frame_cond.notify_all()
+            self._clear_ai()
+            self.recorder.submit(None, None, None)
+            return result
 
-    def set_camera_channel(self, channel: int) -> tuple[bool, str]:
-        if self.camera_locked():
-            return False, f"Camera locked: {self.current_mode()} in progress"
-        return self.camera.use_rtsp(channel)
+    def set_camera_laptop(self):
+        return self._switch(self.camera.use_laptop)
+
+    def set_camera_channel(self, channel):
+        return self._switch(lambda: self.camera.use_rtsp(channel))
+
+    def stop_camera(self):
+        return self._switch(self.camera.stop)
 
     # ------------------------------------------------------------------
     # thresholds: hot reload from .env
@@ -416,6 +467,15 @@ class Runtime:
             "source": cam["source"],
             "channel": cam["channel"],
             "camera_error": cam["error"],
+            "generation": cam["generation"],
+            "switching": cam["switching"],
+            "model_ready": bool(self.ai and self.ai.engine),
+            "model_error": self.ai.model_error if self.ai else None,
+            "detector": "SCRFD-10G",
+            "detector_providers": self.ai.detector.providers if self.ai else [],
+            "model_providers": self.ai.engine.providers if self.ai and self.ai.engine else [],
+            "recording": str(self.recorder.path) if self.recorder.writer else None,
+            "recording_error": self.recorder.error,
             "camera_locked": self.camera_locked(),
             "fps": round(self.fps, 1),
             "frame_size": list(self.frame_size) if self.frame_size else None,
@@ -429,36 +489,134 @@ class Runtime:
     # MJPEG support
     # ------------------------------------------------------------------
 
-    def wait_for_frame(self, last_id: int, timeout: float = 1.0) -> tuple[bytes | None, int]:
+    def wait_for_frame(self, last_id, timeout=1.0, kind="preview"):
         with self._frame_cond:
-            if self._frame_id == last_id:
-                self._frame_cond.wait(timeout=timeout)
-            if self._frame_id == last_id or self._jpeg is None:
-                return None, last_id
-            return self._jpeg, self._frame_id
+            def current():
+                return (self._ai_jpeg, self._ai_frame_id) if kind == "ai" else (self._jpeg, self._frame_id)
+            jpeg, frame_id = current()
+            if frame_id == last_id:
+                self._frame_cond.wait(timeout)
+                jpeg, frame_id = current()
+            return (jpeg, frame_id) if frame_id != last_id else (None, last_id)
 
-    def _publish(self, display: np.ndarray) -> None:
+    def wait_for_delivery(self, last_id, timeout=0.5, kind="preview"):
+        with self._frame_cond:
+            jpeg, frame_id = self.wait_for_frame(last_id, timeout, kind)
+            generation = self._ai_generation if kind == "ai" else self._jpeg_generation
+            if generation != self.camera.current_generation() or (kind == "ai" and time.monotonic()-self._ai_timestamp > 1):
+                jpeg = None
+            return jpeg, frame_id, generation, (self._ai_faces if kind == "ai" and jpeg is not None else [])
+
+    def _clear_ai(self):
+        with self._jobs:
+            self._detect_job = self._reco_job = None
+        with self._frame_cond:
+            self._ai_jpeg = None
+            self._ai_faces = []
+            self._ai_frame_id += 1
+            self._frame_cond.notify_all()
+
+    def _publish(self, display, kind="preview", packet=None, session=None):
+        started = time.perf_counter()
         h, w = display.shape[:2]
-        if w > PREVIEW_MAX_WIDTH:
-            scale = PREVIEW_MAX_WIDTH / w
-            display = cv2.resize(
-                display,
-                (PREVIEW_MAX_WIDTH, int(h * scale)),
-                interpolation=cv2.INTER_AREA,
-            )
-
-        ok, buf = cv2.imencode(
-            ".jpg",
-            display,
-            [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY],
-        )
+        max_width = 320 if kind == "preview" and self.current_mode() == MODE_RECOGNITION else PREVIEW_MAX_WIDTH
+        if w > max_width:
+            display = cv2.resize(display, (max_width, int(h*max_width/w)), interpolation=cv2.INTER_AREA)
+        with performance.measure("jpeg_encode_ms"):
+            ok, buf = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if not ok:
             return
+        with self._mode_lock:
+            if packet and packet.generation != self.camera.current_generation():
+                return
+            if kind == "ai" and not self._valid(packet, session, allow_finished=True):
+                performance.count("ai_results_dropped")
+                return
+            with self._frame_cond:
+                if kind == "ai":
+                    self._ai_generation = packet.generation
+                    self._ai_faces = list(getattr(session, "faces", [])) if session.mode == MODE_RECOGNITION else []
+                    self._ai_jpeg = buf.tobytes()
+                    self._ai_frame_id += 1
+                    self._ai_timestamp = packet.timestamp
+                else:
+                    self._jpeg_generation = packet.generation if packet else self.camera.current_generation()
+                    self._jpeg = buf.tobytes()
+                    self._frame_id += 1
+                self._frame_cond.notify_all()
+            if kind == "ai" and session.mode == MODE_RECOGNITION:
+                faces = self._ai_faces
+                presence = packet.timestamp if faces else session.presence(packet.generation)
+                self.recorder.submit(packet, (packet.generation, id(session)), presence, display, faces)
+        performance.count("ai_published_frames" if kind == "ai" else "published_frames")
+        performance.observe("publish_ms", (time.perf_counter()-started)*1000)
 
-        with self._frame_cond:
-            self._jpeg = buf.tobytes()
-            self._frame_id += 1
-            self._frame_cond.notify_all()
+    def _valid(self, packet, session, allow_finished=False):
+        return (packet is not None and session is self._session
+                and (allow_finished or not session.finished)
+                and packet.generation == self.camera.current_generation()
+                and time.monotonic()-packet.timestamp <= 1.0)
+
+    def _load_engine(self):
+        try:
+            engine = AdaEngine()
+            self.ai.gallery = DemoGallery(engine.model_id)
+            self.ai.engine = engine
+        except Exception as error:
+            self.ai.model_error = str(error)
+            log.exception("AdaFace initialization failed; raw preview remains available")
+
+    def _take_job(self, name):
+        with self._jobs:
+            self._jobs.wait_for(lambda: getattr(self, name) is not None or self.shutting_down, timeout=0.5)
+            job = getattr(self, name)
+            setattr(self, name, None)
+            return job
+
+    def _detect_loop(self):
+        while not self.shutting_down:
+            job = self._take_job("_detect_job")
+            if job is None:
+                continue
+            packet, session = job
+            if not self._valid(packet, session):
+                performance.count("ai_jobs_dropped")
+                continue
+            try:
+                if session.mode == MODE_RECOGNITION:
+                    faces = session.detect(packet)
+                    if self._valid(packet, session):
+                        with self._jobs:
+                            if self._reco_job is not None:
+                                performance.count("ai_jobs_dropped")
+                            self._reco_job = (packet, session, faces)
+                            self._jobs.notify_all()
+                else:
+                    with performance.measure("processing_ms"):
+                        display = session.process_packet(packet) if hasattr(session, "process_packet") else session.process(packet.frame.copy())
+                    if display is not None:
+                        self._publish(display, "ai", packet, session)
+            except Exception as error:
+                log.exception("Detection/session failed")
+                session.fail(str(error))
+
+    def _recognize_loop(self):
+        while not self.shutting_down:
+            job = self._take_job("_reco_job")
+            if job is None:
+                continue
+            packet, session, faces = job
+            if not self._valid(packet, session):
+                performance.count("ai_jobs_dropped")
+                continue
+            try:
+                with performance.measure("processing_ms"):
+                    display = session.process_faces(packet, faces)
+                if display is not None:
+                    self._publish(display, "ai", packet, session)
+            except Exception as error:
+                log.exception("Recognition failed")
+                session.fail(str(error))
 
     def _placeholder(self) -> np.ndarray:
         img = np.zeros((270, 480, 3), dtype=np.uint8)
@@ -474,67 +632,41 @@ class Runtime:
     # worker loop
     # ------------------------------------------------------------------
 
-    def _loop(self) -> None:
-        min_interval = 1.0 / MAX_LOOP_FPS
-        fps_window_start = time.perf_counter()
-        fps_frames = 0
+    def _loop(self):
+        last_packet = None
         last_placeholder = 0.0
-
-        while not self._stop_event.is_set():
-            loop_started = time.perf_counter()
-
-            frame = None
-            try:
-                frame = self.camera.get_frame()
-            except Exception:
-                log.exception("camera read failed")
-
-            if frame is None:
-                now = time.perf_counter()
-                if now - last_placeholder > 0.5:
+        window, count = time.monotonic(), 0
+        while not self.shutting_down:
+            packet = self.camera.packet()
+            now = time.monotonic()
+            if packet is None:
+                if now-last_placeholder > 0.5:
                     self._publish(self._placeholder())
                     last_placeholder = now
-                time.sleep(0.03)
-                continue
-
-            self.frame_size = (int(frame.shape[1]), int(frame.shape[0]))
-
-            session = self.current_session()
-            display = frame
-
-            if session is not None:
-                try:
-                    display = session.process(frame)
-                except Exception as error:
-                    log.exception("session.process failed")
-                    try:
-                        session.fail("%s: %s" % (type(error).__name__, error))
-                    except Exception:
-                        log.exception("session.fail failed")
-                        session.finished = True
-
-                if session.finished:
-                    with self._mode_lock:
-                        if self._session is session:
-                            self._session = None
-
-            if display is None:
-                display = frame
-
-            self._publish(display)
-
-            # fps
-            fps_frames += 1
-            now = time.perf_counter()
-            if now - fps_window_start >= 1.0:
-                self.fps = fps_frames / (now - fps_window_start)
-                fps_frames = 0
-                fps_window_start = now
-
-            # pacing (RTSP get_latest_frame returns immediately)
-            elapsed = time.perf_counter() - loop_started
-            if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
+            elif (packet.generation, packet.frame_id) != last_packet:
+                last_packet = (packet.generation, packet.frame_id)
+                self.frame_size = (packet.frame.shape[1], packet.frame.shape[0])
+                self._publish(packet.frame, packet=packet)
+                session = self.current_session()
+                with self._mode_lock:
+                    if session is self._session and session is not None and not session.finished:
+                        with self._jobs:
+                            if self._detect_job is not None:
+                                performance.count("ai_jobs_dropped")
+                            self._detect_job = (packet, session)
+                            self._jobs.notify_all()
+                performance.observe("frame_age_at_publish_ms", (time.monotonic()-packet.timestamp)*1000)
+                count += 1
+            with self._frame_cond:
+                if self._ai_jpeg is not None and now-self._ai_timestamp > 1.0:
+                    self._ai_jpeg = None
+                    self._ai_faces = []
+                    self._ai_frame_id += 1
+                    self._frame_cond.notify_all()
+            if now-window >= 1:
+                self.fps = count/(now-window)
+                window, count = now, 0
+            self._stop_event.wait(1/MAX_LOOP_FPS)
 
 
 runtime = Runtime()

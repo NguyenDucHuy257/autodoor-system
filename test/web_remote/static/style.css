@@ -13,6 +13,14 @@
 }
 
 * { box-sizing: border-box; }
+button, input, select, textarea { font-family: inherit; }
+.recognition-view { position: relative; }
+.direct-preview-small { width: 240px; max-width: 100%; margin-bottom: 14px; }
+.face-thumbnails { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; max-width: 75%; overflow-x: auto; }
+.face-thumbnail { flex: 0 0 80px; margin: 0; border: 2px solid var(--danger); border-radius: 6px; overflow: hidden; background: #111; }
+.face-thumbnail.recognized { border-color: var(--ok); }
+.video-wrap .face-thumbnail img { width: 80px; height: 80px; object-fit: cover; }
+.face-thumbnail figcaption { background: rgba(0,0,0,.95); color: #fff; font-size: 12px; font-weight: 700; padding: 5px; text-align: center; overflow-wrap: anywhere; }
 
 html, body {
   margin: 0;
@@ -128,7 +136,7 @@ a { color: inherit; text-decoration: none; }
   min-height: 120px;
 }
 
-.video-wrap img { display: block; width: 100%; height: auto; }
+.video-wrap img, .video-wrap canvas { display: block; width: 100%; height: auto; }
 
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 

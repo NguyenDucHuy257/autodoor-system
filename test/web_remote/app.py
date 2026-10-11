@@ -13,6 +13,9 @@ import signal
 import socket
 import sys
 from contextlib import asynccontextmanager
+from test.web_remote.logging_setup import configure_logging, redirect_native_output
+
+configure_logging()
 
 # EnrollmentService prints Vietnamese text (e.g. "Ảnh không đạt chuẩn!").
 # On Windows, a non-UTF-8 console / redirected stdout would raise
@@ -32,7 +35,6 @@ from test.web_remote.templating import templates, STATIC_DIR
 from test.web_remote.routes import camera, calibration, enrollment, recognition
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("web_remote")
 
 
@@ -69,6 +71,8 @@ def _chain_signal_handlers() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
+    redirect_native_output()
     runtime.start()
     _chain_signal_handlers()
     log.info("AutoDoor Test Remote ready: http://%s:8000  (LAN)", _lan_ip())

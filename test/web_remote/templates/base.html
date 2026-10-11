@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>{{ title }} - AutoDoor Test Remote</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version('style.css') }}">
 </head>
 <body data-page="{{ page }}">
   <header class="topbar">
@@ -22,6 +22,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ asset_version('app.js') }}" charset="utf-8"></script>
 </body>
 </html>

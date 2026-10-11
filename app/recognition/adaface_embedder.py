@@ -1,15 +1,22 @@
 import cv2
 import numpy as np
+import onnxruntime as ort
+
 from app.recognition.detector import FaceDetection
 from app.recognition.embedder import FaceEmbedder
 
 
 class AdaFaceEmbedder(FaceEmbedder):
-    def __init__(
-        self,
-        model_path
-    ):
+    def __init__(self, model_path):
         self.model_path = model_path
+
+        self.session = ort.InferenceSession(
+            model_path,
+            providers=[
+                "CUDAExecutionProvider",
+                "CPUExecutionProvider"
+            ]
+        )
 
     def _align(
         self,
@@ -81,5 +88,23 @@ class AdaFaceEmbedder(FaceEmbedder):
 
         formatted_face = self._preprocess(aligned_face=aligned_face)
 
-        raise NotImplementedError
+        embedding = self.session.run(
+            ["embedding"],
+            {"input": formatted_face}
+        )[0]
 
+         # 4. (1, 512) -> (512,)
+        embedding = embedding.flatten().astype(np.float32)
+
+        if embedding.shape != (512,) or not np.isfinite(embedding).all():
+            raise ValueError("Invalid AdaFace embedding")
+
+        # 5. L2 normalization
+        norm = np.linalg.norm(embedding)
+
+        if not np.isfinite(norm) or norm <= 0:
+            raise ValueError("Invalid embedding norm")
+
+        embedding = embedding / norm
+
+        return embedding

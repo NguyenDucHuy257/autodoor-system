@@ -20,7 +20,7 @@
 
 <section class="card">
   <div class="video-wrap">
-    <img id="video" alt="video stream">
+    <canvas id="video" width="960" height="540" aria-label="Camera preview"></canvas>
   </div>
 </section>
 
@@ -44,6 +44,7 @@
 
   <div class="big-status" id="enr-message">Fill the form, pick a camera, press START</div>
 
+  <p class="muted">Frame đã xử lý</p><div class="video-wrap"><canvas id="ai-video" width="960" height="540"></canvas></div>
   <div class="btn-row">
     <button class="btn btn-primary" id="btn-enr-start">START ENROLLMENT</button>
     <button class="btn btn-danger" id="btn-enr-cancel" disabled>CANCEL</button>

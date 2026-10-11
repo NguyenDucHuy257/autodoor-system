@@ -12,12 +12,14 @@
   function $(id) { return document.getElementById(id); }
 
   function api(path, method, body) {
-    var opts = { method: method || "GET", headers: {} };
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, 10000);
+    var opts = { method: method || "GET", headers: {}, signal: controller.signal };
     if (body !== undefined) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
-    return fetch(path, opts).then(function (r) { return r.json(); });
+    return fetch(path, opts).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }).finally(function () { clearTimeout(timeout); });
   }
 
   var toastTimer = null;
@@ -93,10 +95,128 @@
   // video stream
   // ------------------------------------------------------------------
 
+  var streams = [];
+  var currentGeneration = null;
+  function renderRecognitionFaces(faces) {
+    var list = $("rec-face-list"), thumbnails = $("rec-thumbnails");
+    if (!list || !thumbnails) return;
+    var names = {RECOGNIZED: "Đã nhận diện", UNKNOWN: "Không xác định", REJECTED: "Chất lượng không đạt", NO_EMBEDDING: "Chưa có embedding"};
+    thumbnails.innerHTML = "";
+    list.innerHTML = "";
+    faces.forEach(function (face) {
+      var identity = face.identity || {};
+      var name = identity.name || names[face.verdict] || face.verdict;
+      var cls = face.verdict === "RECOGNIZED" ? "recognized" : "rejected";
+      if (face.crop && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(face.crop)) {
+        var figure = document.createElement("figure");
+        figure.className = "face-thumbnail " + cls;
+        var img = document.createElement("img"); img.src = face.crop; img.alt = name;
+        var caption = document.createElement("figcaption"); caption.textContent = name;
+        figure.appendChild(img); figure.appendChild(caption); thumbnails.appendChild(figure);
+      }
+      var q = face.quality || {}, ada = face.adaface || {};
+      function row(label, value) { return "<div class='kv'><span>" + label + "</span><b>" + esc(value) + "</b></div>"; }
+      var card = document.createElement("article"); card.className = "card face-card " + cls;
+      card.innerHTML = "<div class='identity " + cls + "'>" + esc(name) + "</div><p>" + esc(names[face.verdict] || face.verdict) + "</p><div class='kv-grid'>" +
+        row("Mã", identity.code) + row("Phòng", identity.room) + row("Mẫu tư thế", identity.pose) + row("Cosine", fmt(face.similarity)) +
+        row("Độ tin cậy SCRFD", fmt(face.confidence)) + row("Chất lượng", q.passed ? "Đạt" : "Không đạt") +
+        row("Tỷ lệ mặt", fmt(q.face_ratio)) + row("Độ nét", fmt(q.sharpness, 2)) + row("Độ sáng", fmt(q.brightness, 2)) +
+        row("Embedding", ada.embedding_dim ? ada.embedding_dim + "D" : "-") + row("Norm", fmt(ada.embedding_norm)) + row("Provider", (ada.providers || []).join(", ")) + "</div>";
+      if (face.error) { var error = document.createElement("p"); error.textContent = face.error; card.appendChild(error); }
+      list.appendChild(card);
+    });
+    if (!faces.length) list.textContent = "Chưa có kết quả nhận diện.";
+  }
+  function clearStreams() {
+    renderRecognitionFaces([]);
+    streams.forEach(function (stream) {
+      stream.epoch++;
+      if (stream.pending && stream.socket.readyState === WebSocket.OPEN) stream.socket.send(JSON.stringify({sequence: stream.pending.metadata.sequence, rendered: false}));
+      stream.pending = null;
+      stream.canvas.getContext("2d").clearRect(0, 0, stream.canvas.width, stream.canvas.height);
+    });
+  }
   function refreshStream() {
-    var img = $("video");
-    if (!img) return;
-    img.src = "/api/video/stream?t=" + Date.now();
+    if (streams.length) return;
+    [["video", "preview"], ["ai-video", "ai"]].forEach(function (entry) {
+      var canvas = $(entry[0]);
+      if (!canvas) return;
+      var state = {canvas: canvas, epoch: 0, socket: null, stopped: false, metadata: null};
+      streams.push(state);
+      function connect() {
+        if (state.stopped) return;
+        var socket = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/video/live?kind=" + entry[1]);
+        state.socket = socket;
+        socket.binaryType = "blob";
+        function report(job, rendered, decodeMs, renderMs) {
+          if (socket.readyState === WebSocket.OPEN && state.socket === socket) {
+            socket.send(JSON.stringify({sequence: job.metadata.sequence, rendered: rendered,
+              decode_ms: decodeMs || 0, render_ms: renderMs || 0}));
+          }
+        }
+        async function drawLatest() {
+          if (state.decoding) return;
+          state.decoding = true;
+          try {
+            while (state.pending) {
+              var job = state.pending;
+              state.pending = null;
+              var decodeStarted = performance.now(), decodeMs = 0, renderMs = 0, rendered = false;
+              var bitmap = null;
+              try {
+                bitmap = await createImageBitmap(job.blob);
+                decodeMs = performance.now() - decodeStarted;
+                var renderStarted = performance.now();
+                if (job.epoch === state.epoch && job.socket === state.socket && !state.pending &&
+                    (currentGeneration === null || job.metadata.generation >= currentGeneration)) {
+                  if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
+                  if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
+                  canvas.getContext("2d").drawImage(bitmap, 0, 0);
+                  if (entry[1] === "ai") renderRecognitionFaces(job.metadata.faces || []);
+                  rendered = true;
+                }
+                renderMs = performance.now() - renderStarted;
+              } catch (_) {
+                // Invalid/disconnected image is discarded; newer frames continue.
+              } finally {
+                if (bitmap) bitmap.close();
+                if (job.socket.readyState === WebSocket.OPEN && job.socket === state.socket) {
+                  job.socket.send(JSON.stringify({sequence: job.metadata.sequence, rendered: rendered,
+                    decode_ms: decodeMs, render_ms: renderMs}));
+                }
+              }
+            }
+          } finally { state.decoding = false; }
+        }
+        socket.onmessage = function (event) {
+          if (state.socket !== socket) return;
+          if (typeof event.data === "string") {
+            var message = JSON.parse(event.data);
+            state.metadata = message;
+            if (message.clear) {
+              state.epoch++;
+              if (state.pending) { report(state.pending, false); state.pending = null; }
+              if (currentGeneration === null || message.generation >= currentGeneration) {
+                if (entry[1] === "ai") renderRecognitionFaces([]);
+                canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+              }
+              report({metadata: message}, false);
+            }
+            return;
+          }
+          if (!state.metadata) return;
+          var job = {blob: event.data, metadata: state.metadata, epoch: state.epoch, socket: socket};
+          if (state.pending) report(state.pending, false);
+          state.pending = job;
+          drawLatest();
+        };
+        socket.onclose = function () { state.epoch++; state.pending = null; if (!state.stopped) setTimeout(connect, 300); };
+      }
+      connect();
+    });
+    window.addEventListener("pagehide", function () {
+      streams.forEach(function (state) { state.stopped = true; state.epoch++; if (state.socket) state.socket.close(); });
+    });
   }
 
   // ------------------------------------------------------------------
@@ -107,6 +227,11 @@
 
   function applySystem(sys) {
     if (!sys) return;
+    if (currentGeneration !== null && sys.generation < currentGeneration) return;
+    if (sys.generation !== undefined && sys.generation !== currentGeneration) {
+      currentGeneration = sys.generation;
+      clearStreams();
+    }
     var modeEl = $("sys-mode");
     if (modeEl) {
       modeEl.textContent = sys.mode;
@@ -455,102 +580,25 @@
   // ------------------------------------------------------------------
 
   function initRecognition() {
-    var listEl = $("rec-face-list");
-
     $("btn-rec-start").onclick = function () {
-      api("/api/recognition/start", "POST").then(function (res) { toast(res.message, !res.ok); });
+      api("/api/recognition/start", "POST").then(function (res) { toast(res.message, !res.ok); }).catch(function(e) { toast(String(e), true); });
     };
     $("btn-rec-stop").onclick = function () {
-      api("/api/recognition/stop", "POST").then(function (res) { toast(res.message, !res.ok); });
+      api("/api/recognition/stop", "POST").then(function (res) { toast(res.message, !res.ok); }).catch(function(e) { toast(String(e), true); });
     };
-
-    function kv(label, value) {
-      return "<div class='kv'><span>" + label + "</span><b>" + value + "</b></div>";
-    }
-
-    function renderFace(f) {
-      var v = f.verdict.toLowerCase();
-      var html = "<section class='card face-card " + v + "'>";
-      html += "<div class='face-head'><b>Face #" + f.index + "</b><span class='verdict " + v + "'>" + f.verdict + "</span></div>";
-
-      var c = f.candidate;
-      if (f.verdict === "RECOGNIZED") {
-        html += "<div class='identity recognized'>" + esc(c.name) + "</div>";
-        html += "<div class='kv-grid'>" +
-          kv("Member code", esc(c.code)) + kv("Room", esc(c.room)) +
-          kv("Best template pose", esc(c.pose)) + kv("SFace similarity", fmt(c.similarity, 4)) + "</div>";
-      } else if (f.verdict === "REJECTED") {
-        html += "<div class='identity rejected'>REJECTED (quality FAIL)</div>";
-        html += "<div class='kv-grid'>" +
-          kv("Candidate", c ? esc(c.name) : "-") + kv("Similarity", c ? fmt(c.similarity, 4) : "-") +
-          kv("Candidate code", c ? esc(c.code) : "-") + kv("Candidate pose", c ? esc(c.pose) : "-") + "</div>";
-      } else if (f.verdict === "UNKNOWN") {
-        html += "<div class='identity unknown'>UNKNOWN</div>";
-        html += "<div class='kv-grid'>" +
-          kv("Best candidate", c ? esc(c.name) : "-") + kv("Similarity", c ? fmt(c.similarity, 4) : "-") +
-          kv("Candidate code", c ? esc(c.code) : "-") + kv("Candidate pose", c ? esc(c.pose) : "-") + "</div>";
-      } else {
-        html += "<div class='identity rejected'>NO EMBEDDING" + (f.sface_error ? ": " + esc(f.sface_error) : "") + "</div>";
-      }
-
-      html += "<div class='kv-grid'>" +
-        kv("YuNet confidence", fmt(f.yunet_confidence, 4)) +
-        kv("BBox", f.bbox.width + " x " + f.bbox.height) +
-        kv("Face ratio", fmt(f.face_ratio, 4)) +
-        kv("Sharpness", fmt(f.sharpness, 2)) +
-        kv("Brightness", fmt(f.brightness, 2)) +
-        kv("Quality", f.quality_passed ? "<span class='ok-text'>PASS</span>" : "<span class='bad-text'>FAIL: " + esc(failReasons(f.quality_checks)) + "</span>") +
-        kv("Embedding dim", f.embedding_dim) +
-        kv("Embedding norm", fmt(f.embedding_norm, 4)) +
-        kv("SFace time", fmt(f.sface_ms, 2) + " ms") +
-        "</div>" +
-        (f.quality_passed ? "" : "<table class='table'>" + checksRowsHtml(f.quality_checks) + "</table>") +
-        "</section>";
-      return html;
-    }
-
-    function render(data) {
-      applySystem(data.system);
-      var st = data.recognition;
-      var running = !!(st && st.active);
-
-      $("btn-rec-start").disabled = running || data.system.mode !== "IDLE";
-      $("btn-rec-stop").disabled = !running;
-
-      setText("rec-source", data.system.source);
-      setText("rec-channel", data.system.channel);
-      setText("rec-fps", fmt(data.system.fps, 1));
-      setText("rec-frame", data.system.frame_size ? data.system.frame_size.join(" x ") : "-");
-
-      if (!st) {
-        setStatusBox("rec-message", "Press START RECOGNITION", "");
-        listEl.innerHTML = "";
-        return;
-      }
-
-      setText("rec-faces", st.face_count);
-      setText("rec-yunet", fmt(st.yunet_ms, 2) + " ms");
-      setText("rec-db", st.db_embedding_count + " (" + st.db_member_count + " members)");
-      setText("rec-threshold", fmt(st.match_threshold, 2));
-
-      if (st.error) {
-        setStatusBox("rec-message", "ERROR: " + st.error, "bad");
-      } else if (running) {
-        setStatusBox("rec-message", "RUNNING - " + st.face_count + " face(s)", "ok");
-      } else {
-        setStatusBox("rec-message", "STOPPED", "");
-      }
-
-      if (running) {
-        listEl.innerHTML = st.faces.map(renderFace).join("");
-      }
-    }
-
-    function poll() {
-      api("/api/recognition/status").then(render).catch(function () {});
+    async function poll() {
+      try {
+        var data = await api("/api/recognition/status");
+        applySystem(data.system);
+        var st = data.recognition;
+        var running = !!(st && st.active);
+        $("btn-rec-start").disabled = running || data.system.mode !== "IDLE" || !data.system.model_ready;
+        $("btn-rec-stop").disabled = !running;
+        setStatusBox("rec-message", data.system.model_error || (st && st.error) || (running ? "SCRFD + AdaFace đang chạy | " + data.system.model_providers.join(", ") : data.system.model_ready ? "Sẵn sàng nhận diện" : "Đang tải AdaFace"), data.system.model_error || (st && st.error) ? "bad" : "");
+        setText("rec-recording", data.system.recording_error || data.system.recording || "Chưa có clip đang ghi");
+      } catch (_) {} finally { setTimeout(poll, POLL_MS); }
     }
     poll();
-    setInterval(poll, POLL_MS);
   }
 
   // ------------------------------------------------------------------

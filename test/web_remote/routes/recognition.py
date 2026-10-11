@@ -26,7 +26,7 @@ def recognition_start():
         return {"ok": False, "message": "System busy: %s" % active.mode}
 
     try:
-        # loads templates from DB (SessionLocal) - may fail if DB is down
+        # Load only the isolated AdaFace demo gallery.
         session = RecognitionSession()
     except Exception as error:
         return {"ok": False, "message": "%s: %s" % (type(error).__name__, error)}

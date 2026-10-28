@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import torch  # Load bundled CUDA/cuDNN DLLs before ONNX Runtime creates a session.
 import onnxruntime as ort
 
 from app.recognition.detector import FaceDetection

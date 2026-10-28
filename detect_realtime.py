@@ -16,7 +16,6 @@ from app.database.models import (
 from app.recognition.yunet_detector import YuNetDetector
 from app.recognition.sface_embedder import SFaceEmbedder
 from app.recognition.face_matcher import FaceMatcher
-from app.recognition.face_quality import FaceQualityGate
 
 from app.config import (
     CAMRERA_IP,
@@ -24,11 +23,6 @@ from app.config import (
     CAMERA_PASSWORD,
     CAMERA_RTSP_PORT,
 
-    FACE_MIN_CONFIDENCE,
-    FACE_MIN_RATIO,
-    FACE_MIN_SHARPNESS,
-    FACE_MIN_BRIGHTNESS,
-    FACE_MAX_BRIGHTNESS,
 )
 
 
@@ -238,13 +232,7 @@ matcher = FaceMatcher(
     match_threshold=MATCH_THRESHOLD
 )
 
-quality_gate = FaceQualityGate(
-    min_confidence=FACE_MIN_CONFIDENCE,
-    min_face_ratio=FACE_MIN_RATIO,
-    min_sharpness=FACE_MIN_SHARPNESS,
-    min_brightness=FACE_MIN_BRIGHTNESS,
-    max_brightness=FACE_MAX_BRIGHTNESS,
-)
+
 
 
 # ============================================================
@@ -665,24 +653,6 @@ try:
             start=1
         ):
 
-            # -----------------------------------------------
-            # QUALITY
-            # -----------------------------------------------
-
-            quality = quality_gate.evaluate(
-                frame=frame,
-                face=face
-            )
-
-
-            # -----------------------------------------------
-            # SFACE
-            #
-            # Debug mode:
-            # vẫn chạy kể cả quality FAIL
-            # để xem similarity thực tế
-            # -----------------------------------------------
-
             sface_started = (
                 time.perf_counter()
             )
@@ -836,18 +806,6 @@ try:
 
                     "bbox_height":
                         face.height,
-
-                    "quality_passed":
-                        quality.passed,
-
-                    "face_ratio":
-                        quality.face_ratio,
-
-                    "sharpness":
-                        quality.sharpness,
-
-                    "brightness":
-                        quality.brightness,
 
                     "embedding_dim":
                         embedding_dim,
@@ -1061,9 +1019,7 @@ try:
                 (
                     f"#{result['index']} "
                     f"{result['identity']} "
-                    f"| SIM: {score_text} "
-                    f"| Q: "
-                    f"{'PASS' if result['quality_passed'] else 'FAIL'}"
+                    f"| SIM: {score_text}"
                 ),
                 20,
                 y,
@@ -1093,8 +1049,6 @@ try:
                     f" | BBox: "
                     f"{result['bbox_width']}x"
                     f"{result['bbox_height']}"
-                    f" | Ratio: "
-                    f"{result['face_ratio']:.3f}"
                 ),
                 30,
                 y,
@@ -1112,11 +1066,7 @@ try:
             draw_text(
                 display_frame,
                 (
-                    f"Sharp: "
-                    f"{result['sharpness']:.1f}"
-                    f" | Bright: "
-                    f"{result['brightness']:.1f}"
-                    f" | SFace: "
+                    f"SFace: "
                     f"{result['sface_ms']:.1f}ms"
                 ),
                 30,

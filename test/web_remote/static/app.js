@@ -114,13 +114,12 @@
         var caption = document.createElement("figcaption"); caption.textContent = name;
         figure.appendChild(img); figure.appendChild(caption); thumbnails.appendChild(figure);
       }
-      var q = face.quality || {}, ada = face.adaface || {};
+      var ada = face.adaface || {};
       function row(label, value) { return "<div class='kv'><span>" + label + "</span><b>" + esc(value) + "</b></div>"; }
       var card = document.createElement("article"); card.className = "card face-card " + cls;
       card.innerHTML = "<div class='identity " + cls + "'>" + esc(name) + "</div><p>" + esc(names[face.verdict] || face.verdict) + "</p><div class='kv-grid'>" +
         row("Mã", identity.code) + row("Phòng", identity.room) + row("Mẫu tư thế", identity.pose) + row("Cosine", fmt(face.similarity)) +
-        row("Độ tin cậy SCRFD", fmt(face.confidence)) + row("Chất lượng", q.passed ? "Đạt" : "Không đạt") +
-        row("Tỷ lệ mặt", fmt(q.face_ratio)) + row("Độ nét", fmt(q.sharpness, 2)) + row("Độ sáng", fmt(q.brightness, 2)) +
+        row("Độ tin cậy SCRFD", fmt(face.confidence)) +
         row("Embedding", ada.embedding_dim ? ada.embedding_dim + "D" : "-") + row("Norm", fmt(ada.embedding_norm)) + row("Provider", (ada.providers || []).join(", ")) + "</div>";
       if (face.error) { var error = document.createElement("p"); error.textContent = face.error; card.appendChild(error); }
       list.appendChild(card);
@@ -594,6 +593,7 @@
         var running = !!(st && st.active);
         $("btn-rec-start").disabled = running || data.system.mode !== "IDLE" || !data.system.model_ready;
         $("btn-rec-stop").disabled = !running;
+        setText("rec-gallery", st ? "Gallery: " + st.db_member_count + " members | " + st.db_embedding_count + " embeddings" : "");
         setStatusBox("rec-message", data.system.model_error || (st && st.error) || (running ? "SCRFD + AdaFace đang chạy | " + data.system.model_providers.join(", ") : data.system.model_ready ? "Sẵn sàng nhận diện" : "Đang tải AdaFace"), data.system.model_error || (st && st.error) ? "bad" : "");
         setText("rec-recording", data.system.recording_error || data.system.recording || "Chưa có clip đang ghi");
       } catch (_) {} finally { setTimeout(poll, POLL_MS); }

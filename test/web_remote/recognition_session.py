@@ -15,13 +15,22 @@ class RecognitionSession(BaseSession):
         super().__init__()
         if runtime.ai.engine is None:
             raise RuntimeError(runtime.ai.model_error or "AdaFace model is loading; try again shortly")
-        self.person_database, self.matrix = runtime.ai.gallery.load()
-        self.member_count = len({p["code"] for p in self.person_database})
+        self.gallery_revision = None
+        self._refresh_gallery()
         self.faces = []
         self.detection_ms = 0.0
         self.last_presence = None
         self.presence_generation = None
         self.last_update = None
+
+    def _refresh_gallery(self):
+        snapshot = runtime.ai.gallery.load_if_changed(self.gallery_revision)
+        if snapshot is not None:
+            revision, people, matrix = snapshot
+            with self.lock:
+                self.person_database, self.matrix = people, matrix
+                self.member_count = len({p["code"] for p in people})
+                self.gallery_revision = revision
 
     def detect(self, packet):
         started = time.perf_counter()
@@ -34,31 +43,30 @@ class RecognitionSession(BaseSession):
         return faces
 
     def process_faces(self, packet, detections):
+        self._refresh_gallery()
+        # Keep identities and vectors from the same snapshot for this frame.
+        people, matrix = self.person_database, self.matrix
         results = []
         for index, face in enumerate(detections, 1):
             if not runtime._valid(packet, self):
                 return None
-            quality = runtime.ai.quality_gate.evaluate(packet.frame, face)
             embedding, info, error = None, {}, None
-            if quality.passed:
-                try:
-                    embedding, info = runtime.ai.engine.analyze(packet.frame, face)
-                except Exception as exc:
-                    error = "AdaFace " + type(exc).__name__
+            try:
+                embedding, info = runtime.ai.engine.analyze(packet.frame, face)
+            except Exception as exc:
+                error = "AdaFace " + type(exc).__name__
             best, score = None, None
-            if embedding is not None and len(self.matrix):
+            if embedding is not None and len(matrix):
                 with performance.measure("matching_ms"):
-                    scores = self.matrix @ embedding
+                    scores = matrix @ embedding
                     at = int(np.argmax(scores))
                     score = float(scores[at])
-                    best = self.person_database[at]
-            verdict = "REJECTED" if not quality.passed else "NO_EMBEDDING" if embedding is None else "RECOGNIZED" if score is not None and score >= MATCH_THRESHOLD else "UNKNOWN"
+                    best = people[at]
+            verdict = "NO_EMBEDDING" if embedding is None else "RECOGNIZED" if score is not None and score >= MATCH_THRESHOLD else "UNKNOWN"
             results.append(dict(index=index, verdict=verdict,
                 identity=best if verdict == "RECOGNIZED" else None, similarity=score,
                 bbox=dict(x=face.x, y=face.y, width=face.width, height=face.height),
-                confidence=face.confidence, adaface=info, error=error,
-                quality=dict(passed=quality.passed, sharpness=quality.sharpness,
-                             brightness=quality.brightness, face_ratio=quality.face_ratio)))
+                confidence=face.confidence, adaface=info, error=error))
             results[-1]["crop"] = face_thumbnail(packet.frame, results[-1]["bbox"])
         with self.lock:
             if not runtime._valid(packet, self):

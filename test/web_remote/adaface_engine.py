@@ -56,7 +56,16 @@ class DemoGallery:
     def __init__(self, model_id, directory=GALLERY_DIR):
         self.model_id = model_id
         self.directory = Path(directory)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self._revision = 0
+
+    def load_if_changed(self, revision):
+        """Return one consistent snapshot after a successful enrollment commit."""
+        with self.lock:
+            if revision == self._revision:
+                return None
+            people, matrix = self.load()
+            return self._revision, people, matrix
 
     def load(self):
         people, vectors = [], []
@@ -95,6 +104,7 @@ class DemoGallery:
                 with temporary.open("wb") as stream:
                     np.savez_compressed(stream, metadata=json.dumps(meta, ensure_ascii=False), embeddings=matrix)
                 os.replace(temporary, target)
+                self._revision += 1
             finally:
                 temporary.unlink(missing_ok=True)
         return dict(id=code, code=code, name=name, room=room)
